@@ -2,7 +2,6 @@
 package http
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -35,15 +34,13 @@ type WebSocketHandler struct {
 	// Connection management
 	connsMu sync.RWMutex
 	conns   map[*websocket.Conn]*connectionInfo
-
-	// Write lock for direct connection writes (avoiding races with subscriber writers)
-	writeMu sync.Mutex
 }
 
 // connectionInfo tracks information about a WebSocket connection
 type connectionInfo struct {
 	clientID    string
 	subscribers map[string]*subscriber.Subscriber // topic -> subscriber
+	writeChan   chan models.ServerMsg             // unified write channel for all messages
 	mu          sync.RWMutex
 }
 
@@ -74,7 +71,11 @@ func (h *WebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *http.Reques
 	connInfo := &connectionInfo{
 		clientID:    generateClientID(),
 		subscribers: make(map[string]*subscriber.Subscriber),
+		writeChan:   make(chan models.ServerMsg, 100),
 	}
+
+	// Start single writer goroutine for this connection
+	go h.unifiedWriter(conn, connInfo.writeChan)
 
 	// Register connection
 	h.connsMu.Lock()
@@ -83,18 +84,30 @@ func (h *WebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *http.Reques
 
 	log.Printf("WebSocket connection established for client %s", connInfo.clientID)
 
-	// Send welcome message
-	h.sendDirectMessage(conn, models.ServerMsg{
+	// Send welcome message through unified channel
+	welcomeMsg := models.ServerMsg{
 		Type: "connected",
 		Message: &models.Message{
 			ID:      "welcome",
 			Payload: json.RawMessage(fmt.Sprintf(`{"client_id": "%s"}`, connInfo.clientID)),
 		},
 		Ts: time.Now(),
-	})
+	}
+	connInfo.writeChan <- welcomeMsg
 
 	// Start message reader
 	h.handleMessages(conn, connInfo)
+}
+
+// unifiedWriter is the single goroutine responsible for writing all messages to a WebSocket connection.
+// This prevents concurrent write race conditions by ensuring only one writer.
+func (h *WebSocketHandler) unifiedWriter(conn *websocket.Conn, writeChan <-chan models.ServerMsg) {
+	for msg := range writeChan {
+		if err := conn.WriteJSON(msg); err != nil {
+			log.Printf("Failed to write message to WebSocket: %v", err)
+			break
+		}
+	}
 }
 
 // handleMessages reads and processes incoming WebSocket messages.
@@ -155,12 +168,22 @@ func (h *WebSocketHandler) handleSubscribe(conn *websocket.Conn, connInfo *conne
 	}
 	connInfo.mu.RUnlock()
 
-	// Create subscriber
-	sub := subscriber.NewSubscriber(connInfo.clientID, conn, 100) // Default buffer size
+	// Create subscriber and forward its messages to unified write channel
+	sub := subscriber.NewSubscriber(connInfo.clientID, nil, 100) // No direct WebSocket connection
 
-	// Start writer goroutine
-	ctx, _ := context.WithCancel(context.Background())
-	sub.StartWriter(ctx, 5*time.Second) // 5 second write timeout
+	// Start a goroutine that forwards messages from subscriber to unified write channel
+	// and properly closes the Done channel when finished
+	go func() {
+		defer close(sub.Done) // Ensure Done channel is closed when this goroutine exits
+		for msg := range sub.Send {
+			select {
+			case connInfo.writeChan <- msg:
+				// Message forwarded successfully
+			default:
+				log.Printf("Warning: write channel full for client %s", connInfo.clientID)
+			}
+		}
+	}()
 
 	// Add subscriber to topic
 	topic.AddSubscriber(sub)
@@ -246,16 +269,39 @@ func (h *WebSocketHandler) handlePublish(conn *websocket.Conn, connInfo *connect
 
 // handlePing responds to ping messages with pong.
 func (h *WebSocketHandler) handlePing(conn *websocket.Conn, msg *models.WSClientMsg) {
-	h.sendDirectMessage(conn, models.ServerMsg{
+	h.connsMu.RLock()
+	connInfo, exists := h.conns[conn]
+	h.connsMu.RUnlock()
+
+	if !exists {
+		return
+	}
+
+	pongMsg := models.ServerMsg{
 		Type:      MsgTypePong,
 		RequestID: msg.RequestID,
 		Ts:        time.Now(),
-	})
+	}
+
+	select {
+	case connInfo.writeChan <- pongMsg:
+		// Message sent successfully
+	default:
+		log.Printf("Warning: write channel full for client %s", connInfo.clientID)
+	}
 }
 
 // sendAck sends an acknowledgment message.
 func (h *WebSocketHandler) sendAck(conn *websocket.Conn, requestID, message string) {
-	h.sendDirectMessage(conn, models.ServerMsg{
+	h.connsMu.RLock()
+	connInfo, exists := h.conns[conn]
+	h.connsMu.RUnlock()
+
+	if !exists {
+		return
+	}
+
+	ackMsg := models.ServerMsg{
 		Type:      MsgTypeAck,
 		RequestID: requestID,
 		Message: &models.Message{
@@ -263,29 +309,40 @@ func (h *WebSocketHandler) sendAck(conn *websocket.Conn, requestID, message stri
 			Payload: json.RawMessage(fmt.Sprintf(`{"message": "%s"}`, message)),
 		},
 		Ts: time.Now(),
-	})
+	}
+
+	select {
+	case connInfo.writeChan <- ackMsg:
+		// Message sent successfully
+	default:
+		log.Printf("Warning: write channel full for client %s", connInfo.clientID)
+	}
 }
 
 // sendError sends an error message.
 func (h *WebSocketHandler) sendError(conn *websocket.Conn, code, message string) {
-	h.sendDirectMessage(conn, models.ServerMsg{
+	h.connsMu.RLock()
+	connInfo, exists := h.conns[conn]
+	h.connsMu.RUnlock()
+
+	if !exists {
+		return
+	}
+
+	errorMsg := models.ServerMsg{
 		Type: MsgTypeError,
 		Error: &models.ErrorObj{
 			Code:    code,
 			Message: message,
 		},
 		Ts: time.Now(),
-	})
-}
+	}
 
-// sendDirectMessage writes a message directly to the WebSocket connection.
-// This method uses a write lock to avoid races with subscriber writers.
-func (h *WebSocketHandler) sendDirectMessage(conn *websocket.Conn, msg models.ServerMsg) {
-	h.writeMu.Lock()
-	defer h.writeMu.Unlock()
-
-	if err := conn.WriteJSON(msg); err != nil {
-		log.Printf("Failed to send direct message: %v", err)
+	select {
+	case connInfo.writeChan <- errorMsg:
+		// Message sent successfully
+	default:
+		log.Printf("Warning: write channel full for client %s", connInfo.clientID)
 	}
 }
 
@@ -312,6 +369,9 @@ func (h *WebSocketHandler) cleanupConnection(conn *websocket.Conn) {
 		sub.Close()
 	}
 	connInfo.mu.Unlock()
+
+	// Close unified write channel to stop the writer goroutine
+	close(connInfo.writeChan)
 
 	// Close connection
 	conn.Close()

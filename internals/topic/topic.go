@@ -112,7 +112,7 @@ func (t *Topic) Publish(msg models.Message, policy string, wsBuf int) (delivered
 func (t *Topic) deliverToSubscriber(sub *subscriber.Subscriber, msg models.Message, policy string, wsBuf int) bool {
 	// Convert Message to ServerMsg
 	serverMsg := models.ServerMsg{
-		Type:    "message",
+		Type:    "event",
 		Topic:   t.Name,
 		Message: &msg,
 		Ts:      time.Now(),
@@ -153,7 +153,7 @@ func (t *Topic) dropOldestAndSend(sub *subscriber.Subscriber, msg models.Message
 		// Successfully drained one message, now try to send the new one
 		// Convert Message to ServerMsg
 		serverMsg := models.ServerMsg{
-			Type:    "message",
+			Type:    "event",
 			Topic:   t.Name,
 			Message: &msg,
 			Ts:      time.Now(),

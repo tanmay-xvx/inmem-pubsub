@@ -45,6 +45,13 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 	r.Get("/stats", h.Stats)
 }
 
+// RegisterTopicManagerRoutes registers all topic manager HTTP routes with the provided chi router.
+// This function creates a new HTTP handler and registers all routes.
+func RegisterTopicManagerRoutes(r chi.Router, mgr topicManagerService.TopicManager) {
+	handler := NewHandler(mgr)
+	handler.RegisterRoutes(r)
+}
+
 // CreateTopicRequest represents the request body for creating a topic.
 type CreateTopicRequest struct {
 	Name string `json:"name"`
