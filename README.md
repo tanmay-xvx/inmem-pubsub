@@ -519,7 +519,6 @@ test.test_concurrent_publishers(num_publishers=5, messages_each=15)
 - ✅ `100% success rate` for concurrent publishing
 - ✅ `100.0% accuracy` for ring buffer tests
 - ✅ `DROP_OLDEST working: True` for backpressure tests
-- ❌ `0% success rate` indicates connection issues
 
 ### Manual API Testing
 
