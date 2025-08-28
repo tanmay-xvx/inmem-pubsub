@@ -99,6 +99,7 @@ cp .env.example .env
 ### Message Types
 
 #### Subscribe to Topic
+
 ```json
 {
   "type": "subscribe",
@@ -108,6 +109,7 @@ cp .env.example .env
 ```
 
 #### Unsubscribe from Topic
+
 ```json
 {
   "type": "unsubscribe",
@@ -117,6 +119,7 @@ cp .env.example .env
 ```
 
 #### Publish Message
+
 ```json
 {
   "type": "publish",
@@ -131,6 +134,7 @@ cp .env.example .env
 ```
 
 #### Ping (Keep-alive)
+
 ```json
 {
   "type": "ping",
@@ -141,6 +145,7 @@ cp .env.example .env
 ### Response Messages
 
 #### Acknowledgment
+
 ```json
 {
   "type": "ack",
@@ -154,6 +159,7 @@ cp .env.example .env
 ```
 
 #### Error
+
 ```json
 {
   "type": "error",
