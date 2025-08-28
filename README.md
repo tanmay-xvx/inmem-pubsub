@@ -44,6 +44,8 @@ A high-performance, in-memory publish/subscribe system built in Go with WebSocke
 
 ## 📦 Installation
 
+### Local Development
+
 ```bash
 # Clone the repository
 git clone https://github.com/tanmay-xvx/inmem-pubsub.git
@@ -57,6 +59,144 @@ go build .
 
 # Run the server
 ./inmem-pubsub
+```
+
+### Docker
+
+#### Prerequisites
+
+- Docker installed and running on your system
+- Port 8080 available on your host machine
+
+#### Quick Start with Docker
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/tanmay-xvx/inmem-pubsub.git
+cd inmem-pubsub
+
+# 2. Build Docker image
+docker build -t inmem-pubsub .
+
+# 3. Run container in detached mode
+docker run -d -p 8080:8080 --name inmem-pubsub-container inmem-pubsub
+
+# 4. Verify service is running
+curl http://localhost:8080/health
+```
+
+#### Docker Management Commands
+
+```bash
+# View container logs (real-time)
+docker logs -f inmem-pubsub-container
+
+# View last 50 log lines
+docker logs --tail 50 inmem-pubsub-container
+
+# Check container status
+docker ps
+
+# Stop the container
+docker stop inmem-pubsub-container
+
+# Remove the container
+docker rm inmem-pubsub-container
+
+# Remove the image
+docker rmi inmem-pubsub
+```
+
+#### Docker with Custom Configuration
+
+```bash
+# Run with environment variables
+docker run -d -p 8080:8080 \
+  -e HOST=0.0.0.0 \
+  -e PORT=8080 \
+  -e READ_TIMEOUT=30s \
+  -e WRITE_TIMEOUT=30s \
+  --name inmem-pubsub-container \
+  inmem-pubsub
+
+# Run with custom port mapping
+docker run -d -p 9090:8080 --name inmem-pubsub-custom-port inmem-pubsub
+# Service will be available at http://localhost:9090
+```
+
+#### Testing the Dockerized Service
+
+```bash
+# 1. Create a topic
+curl -X POST http://localhost:8080/topics \
+  -H "Content-Type: application/json" \
+  -d '{"name": "orders"}'
+
+# 2. Check health
+curl http://localhost:8080/health | jq .
+
+# 3. List topics
+curl http://localhost:8080/topics | jq .
+
+# 4. Get statistics
+curl http://localhost:8080/stats | jq .
+
+# 5. Test WebSocket (requires Python websocket-client)
+pip install websocket-client
+python test_websocket_proper.py
+```
+
+#### Docker Compose (Optional)
+
+Create a `docker-compose.yml` file:
+
+```yaml
+version: "3.8"
+services:
+  inmem-pubsub:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8080
+      - READ_TIMEOUT=30s
+      - WRITE_TIMEOUT=30s
+    restart: unless-stopped
+    container_name: inmem-pubsub
+```
+
+Run with Docker Compose:
+
+```bash
+# Start service
+docker-compose up -d
+
+# View logs
+docker-compose logs -f
+
+# Stop service
+docker-compose down
+```
+
+#### Troubleshooting Docker
+
+```bash
+# Check if Docker is running
+docker --version
+
+# Check if port 8080 is available
+lsof -i :8080  # On macOS/Linux
+netstat -an | grep 8080  # On Windows
+
+# Rebuild image (force)
+docker build --no-cache -t inmem-pubsub .
+
+# Check container resource usage
+docker stats inmem-pubsub-container
+
+# Access container shell for debugging
+docker exec -it inmem-pubsub-container /bin/sh
 ```
 
 ## ⚙️ Configuration
@@ -103,8 +243,10 @@ cp .env.example .env
 ```json
 {
   "type": "subscribe",
-  "topic": "news",
-  "request_id": "req-123"
+  "topic": "orders",
+  "client_id": "test-client",
+  "request_id": "550e8400-e29b-41d4-a716-446655440000",
+  "last_n": 5
 }
 ```
 
@@ -113,8 +255,9 @@ cp .env.example .env
 ```json
 {
   "type": "unsubscribe",
-  "topic": "news",
-  "request_id": "req-124"
+  "topic": "orders",
+  "client_id": "test-client",
+  "request_id": "340e8400-e29b-41d4-a716-4466554480098"
 }
 ```
 
@@ -123,13 +266,16 @@ cp .env.example .env
 ```json
 {
   "type": "publish",
-  "topic": "news",
+  "topic": "orders",
   "message": {
-    "id": "msg-456",
-    "payload": "Breaking news!",
-    "timestamp": "2024-01-01T12:00:00Z"
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "payload": {
+      "order_id": "ORD-123",
+      "amount": "99.5",
+      "currency": "USD"
+    }
   },
-  "request_id": "req-125"
+  "request_id": "340e8400-e29b-41d4-a716-4466554480098"
 }
 ```
 
@@ -138,7 +284,7 @@ cp .env.example .env
 ```json
 {
   "type": "ping",
-  "request_id": "req-126"
+  "request_id": "570t8400-e29b-41d4-a716-4466554412345"
 }
 ```
 
@@ -149,12 +295,28 @@ cp .env.example .env
 ```json
 {
   "type": "ack",
-  "request_id": "req-123",
+  "request_id": "550e8400-e29b-41d4-a716-446655440000",
+  "topic": "orders",
+  "status": "ok",
+  "ts": "2025-08-25T10:00:00Z"
+}
+```
+
+#### Published Message Event
+
+```json
+{
+  "type": "event",
+  "topic": "orders",
   "message": {
-    "id": "ack",
-    "payload": "Subscribed to topic 'news'"
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "payload": {
+      "order_id": "ORD-123",
+      "amount": 99.5,
+      "currency": "USD"
+    }
   },
-  "ts": "2024-01-01T12:00:00Z"
+  "ts": "2025-08-25T10:01:00Z"
 }
 ```
 
@@ -163,15 +325,28 @@ cp .env.example .env
 ```json
 {
   "type": "error",
+  "request_id": "req-67890",
   "error": {
     "code": "TOPIC_NOT_FOUND",
     "message": "Topic 'nonexistent' not found"
   },
-  "ts": "2024-01-01T12:00:00Z"
+  "ts": "2025-08-25T10:02:00Z"
+}
+```
+
+#### Pong Response
+
+```json
+{
+  "type": "pong",
+  "request_id": "ping-abc",
+  "ts": "2025-08-25T10:03:00Z"
 }
 ```
 
 ## 🧪 Testing
+
+### Unit Tests
 
 ```bash
 # Run all tests
@@ -185,6 +360,38 @@ go test ./internals/topic
 
 # Run tests with coverage
 go test -cover ./...
+```
+
+### Integration Testing
+
+Test the complete WebSocket functionality:
+
+```bash
+# Create a topic first
+curl -X POST http://localhost:8080/topics -H "Content-Type: application/json" -d '{"name": "orders"}'
+
+# Test WebSocket functionality (requires websocket-client Python package)
+pip install websocket-client
+python test_websocket_proper.py
+```
+
+### Manual API Testing
+
+```bash
+# Health check
+curl http://localhost:8080/health
+
+# List topics
+curl http://localhost:8080/topics
+
+# Get detailed stats
+curl http://localhost:8080/stats
+
+# Create a topic
+curl -X POST http://localhost:8080/topics -H "Content-Type: application/json" -d '{"name": "test"}'
+
+# Delete a topic
+curl -X DELETE http://localhost:8080/topics/test
 ```
 
 ## 📊 Metrics
@@ -232,9 +439,11 @@ The system provides comprehensive metrics:
 ## 🚀 Performance
 
 - **Concurrent Design**: Fully concurrent with proper synchronization
+- **Race Condition Free**: Unified write channels eliminate WebSocket write conflicts
 - **Memory Efficient**: Ring buffer implementation for message storage
 - **Fast Operations**: O(1) topic lookup, O(n) subscriber notification
 - **Scalable**: Designed for high-throughput message delivery
+- **Backpressure Handling**: DROP_OLDEST policy for buffer overflow management
 
 ## 🤝 Contributing
 
@@ -243,10 +452,6 @@ The system provides comprehensive metrics:
 3. Commit your changes (`git commit -m 'Add amazing feature'`)
 4. Push to the branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## 🙏 Acknowledgments
 
