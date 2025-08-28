@@ -12,6 +12,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/tanmay-xvx/inmem-pubsub/internals/models"
 	"github.com/tanmay-xvx/inmem-pubsub/internals/subscriber"
+	"github.com/tanmay-xvx/inmem-pubsub/internals/topic"
 	"github.com/tanmay-xvx/inmem-pubsub/topicManagerService"
 )
 
@@ -193,10 +194,42 @@ func (h *WebSocketHandler) handleSubscribe(conn *websocket.Conn, connInfo *conne
 	connInfo.subscribers[msg.Topic] = sub
 	connInfo.mu.Unlock()
 
+	// Send historical messages if requested
+	if msg.LastN > 0 {
+		h.sendHistoricalMessages(topic, sub, msg.LastN)
+	}
+
 	// Send acknowledgment
 	h.sendAck(conn, msg.RequestID, fmt.Sprintf("Subscribed to topic '%s'", msg.Topic))
 
 	log.Printf("Client %s subscribed to topic '%s'", connInfo.clientID, msg.Topic)
+}
+
+// sendHistoricalMessages sends historical messages from the topic's ring buffer to the subscriber.
+func (h *WebSocketHandler) sendHistoricalMessages(topic *topic.Topic, sub *subscriber.Subscriber, lastN int) {
+	// Get historical messages from the topic's ring buffer
+	historicalMessages := topic.GetLastN(lastN)
+
+	// Send each historical message to the subscriber
+	for _, msg := range historicalMessages {
+		serverMsg := models.ServerMsg{
+			Type:    "event",
+			Topic:   topic.Name,
+			Message: &msg,
+			Ts:      time.Now(),
+		}
+
+		// Send message through subscriber's channel
+		select {
+		case sub.Send <- serverMsg:
+			// Message sent successfully
+		default:
+			// Buffer full, skip this historical message
+			log.Printf("Skipping historical message for client %s: buffer full", sub.ClientID)
+		}
+	}
+
+	log.Printf("Sent %d historical messages to client %s", len(historicalMessages), sub.ClientID)
 }
 
 // handleUnsubscribe handles unsubscription requests.
